@@ -131,6 +131,8 @@ OTHER DEALINGS IN THE SOFTWARE.
 # {{{ debugger interface
 
 class Debugger(bdb.Bdb):
+    _interrupt_reset = None
+
     def __init__(self, steal_output=False):
         bdb.Bdb.__init__(self)
         self.ui = DebuggerUI(self)
@@ -314,6 +316,37 @@ class Debugger(bdb.Bdb):
         if not self._wait_for_mainpyfile:
             self.interaction(frame, exc_tuple)
 
+    def _set_interrupt_handler(self):
+        if self._interrupt_reset is not None:
+            return
+
+        from pudb import set_interrupt_handler, _handler_is_not_default_warning
+        self._interrupt_reset = set_interrupt_handler()
+        interrupt_signal, old_handler = self._interrupt_reset
+
+        # Since our "support" of non-default signal handlers is essentially untested and experimental,
+        # let's tell the user what's going on.
+        _handler_is_not_default_warning(
+                "A non-default handler for signal {signal} was uninstalled ({handler}). Pudb will reinstate it upon quit.",
+                interrupt_signal,
+                old_handler,
+        )
+
+    def _unset_interrupt_handler(self):
+        if self._interrupt_reset is None:
+            return
+
+        from pudb import set_interrupt_handler, _handler_is_not_default_warning
+
+        signal, old_handler = self._interrupt_reset
+        self._interrupt_reset = None
+
+        # Since our "support" of non-default signal handlers is essentially untested and experimental,
+        # let's tell the user what's going on.
+        _handler_is_not_default_warning("Reinstating non-default handler for signal {signal} ({handler}).", signal, old_handler)
+
+        return set_interrupt_handler(signal, old_handler)
+
     def _runscript(self, filename):
         # Start with fresh empty copy of globals and locals and tell the script
         # that it's being run as __main__ to avoid scripts being able to access
@@ -335,8 +368,7 @@ class Debugger(bdb.Bdb):
             statement = 'execfile( "%s")' % filename
 
         # Set up an interrupt handler
-        from pudb import set_interrupt_handler
-        set_interrupt_handler()
+        self._set_interrupt_handler()
 
         self.run(statement, globals=globals_, locals=locals_)
 
@@ -1150,6 +1182,7 @@ class DebuggerUI(FrameVarInfoKeeper):
                 self.columns._invalidate()
 
         def quit(w, size, key):
+            self.debugger._unset_interrupt_handler()
             self.debugger.set_quit()
             end()
 

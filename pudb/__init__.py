@@ -125,7 +125,7 @@ def set_trace():
     import sys
     dbg = _get_debugger()
 
-    set_interrupt_handler()
+    dbg._set_interrupt_handler()
     dbg.set_trace(sys._getframe().f_back)
 
 
@@ -134,10 +134,30 @@ def _interrupt_handler(signum, frame):
     _get_debugger().set_trace(frame)
 
 
-def set_interrupt_handler(interrupt_signal=DEFAULT_SIGNAL):
+def _handler_is_not_default_warning(message, signal, handler):
+    """Provide a readable warning about non-default signal handlers"""
+    import signal as s
+    if handler is s.default_int_handler or handler == s.SIG_DFL:
+        # Nothing to do.
+        return
+
+    if handler is None:
+        # This is the documented meaning of getsignal()->None.
+        handler_repr = 'not installed from python'
+    else:
+        handler_repr = repr(handler)
+
+    from warnings import warn
+    warn(message.format(signal=signal, handler=handler_repr))
+
+
+def set_interrupt_handler(interrupt_signal=DEFAULT_SIGNAL, interrupt_handler=_interrupt_handler):
     """
     Set up an interrupt handler, to activate PuDB when Python receives the
     signal `interrupt_signal`.  By default it is SIGINT (i.e., Ctrl-c).
+
+    The return values are (signal, handler), suitable for restoring the previous
+    state of this signal's handler.
 
     To use a different signal, pass it as the argument to this function, like
     `set_interrupt_handler(signal.SIGALRM)`.  You can then break your code
@@ -153,20 +173,13 @@ def set_interrupt_handler(interrupt_signal=DEFAULT_SIGNAL):
     Note, this may not work if you use threads or subprocesses.
     """
     import signal
-    old_handler = signal.getsignal(interrupt_signal)
+    if interrupt_handler is None:
+        # Setting the handler to None isn't actually allowed, even though it *is* a valid return value. :(
+        interrupt_handler = signal.SIG_DFL
 
-    if old_handler is not signal.default_int_handler and old_handler != signal.SIG_DFL:
-        # Since we don't currently have support for a non-default signal handlers,
-        # let's avoid undefined-behavior territory and just show a warning.
-        from warnings import warn
-        if old_handler is None:
-            # This is the documented meaning of getsignal()->None.
-            old_handler = 'not installed from python'
-        return warn("A non-default handler for signal %d is already installed (%s). Skipping pudb interrupt support." 
-                % (interrupt_signal, old_handler))
 
     try:
-        signal.signal(interrupt_signal, _interrupt_handler)
+        return interrupt_signal, signal.signal(interrupt_signal, interrupt_handler)
     except ValueError:
         from pudb.lowlevel import format_exception
         import sys
